@@ -1,0 +1,835 @@
+--- a/src/klayout_main/klayout_main/klayout.cc
++++ b/src/klayout_main/klayout_main/klayout.cc
+@@ -35,6 +35,169 @@
+ #include "gsiExternalMain.h"
+ 
+ #include "tlArch.h"
++
++#if defined(Q_OS_OHOS)
++# include <qohosappcontext_p.h>
++# include "tlEnv.h"
++# include <cstdlib>
++# include <cstdio>
++# include <string>
++# include <cerrno>
++# include <dlfcn.h>
++# include <QDir>
++# include <QStyleFactory>
++# include <QPalette>
++# include <QColor>
++# include <QFileInfo>
++# include <QStringList>
++# include <QTimer>
++# include <QIcon>
++# include <QFile>
++# include <QApplication>
++# include <QMainWindow>
++# include <QToolBar>
++# include <QAction>
++# include <typeinfo>
++# include "dbStream.h"
++# include "tlClassRegistry.h"
++
++// OHOS 诊断：优先 hilog（dlopen 动态取 OH_LOG_Print，不新增 DT_NEEDED），
++// 失败降级写文件（沙箱内路径，仅应用自查）。
++static void ohos_dbg (const std::string &msg)
++{
++  typedef void (*ohlog_t) (int, int, unsigned int, const char *, const char *, ...);
++  static ohlog_t s_log = 0;
++  static int s_state = 0;
++  if (s_state == 0) {
++    s_state = 1;
++    void *h = dlopen ("libhilog_ndk.z.so", RTLD_NOW | RTLD_GLOBAL);
++    if (!h) h = dlopen ("/system/lib64/libhilog_ndk.z.so", RTLD_NOW | RTLD_GLOBAL);
++    if (h) s_log = (ohlog_t) dlsym (h, "OH_LOG_Print");
++  }
++  if (s_log) {
++    // LOG_APP=0, LOG_ERROR=6 (hilog 默认只显示 I 及以上，用 E 保证可见), domain=0xD001400
++    s_log (0, 6, 0xD001400u, "KLAYOUT_OHOS", "%{public}s", msg.c_str ());
++    return;
++  }
++  const char *home = getenv ("HOME");
++  std::string hp = home ? (std::string (home) + "/klayout_boot.log") : std::string ();
++  const char *cands[] = {
++    "/data/local/tmp/klayout_boot.log",
++    "/data/storage/el1/tmp/klayout_boot.log",
++    "/tmp/klayout_boot.log",
++    hp.c_str ()
++  };
++  for (const char *p : cands) {
++    if (!p || !*p) continue;
++    FILE *f = fopen (p, "a");
++    if (f) { fprintf (f, "%s\n", msg.c_str ()); fclose (f); return; }
++  }
++}
++
++//  stderr 重定向的目标（沙箱内），供 ohos_dump_stderr() 增量读取
++static QByteArray s_err_path;
++
++//  把重定向到沙箱文件的 stderr 内容转投 hilog。KLayout 的 tl::error/tl::warn
++//  只写 std::cerr，在 OHOS 上原本完全不可见 —— 插件加载失败、宏报错等都被吞掉。
++static void ohos_dump_stderr ()
++{
++  if (s_err_path.isEmpty ()) { return; }
++  QFile f (QString::fromUtf8 (s_err_path.constData ()));
++  if (!f.open (QIODevice::ReadOnly)) { return; }
++  QByteArray all = f.readAll ();
++  f.close ();
++  static int s_off = 0;
++  if (all.size () <= s_off) { return; }
++  QByteArray chunk = all.mid (s_off);
++  s_off = all.size ();
++  int p = 0;
++  while (p < (int) chunk.size ()) {
++    int nl = chunk.indexOf ('\n', p);
++    if (nl < 0) { nl = chunk.size (); }
++    QByteArray line = chunk.mid (p, nl - p);
++    if (!line.trimmed ().isEmpty ()) {
++      ohos_dbg ("[stderr] " + std::string (line.constData ()));
++    }
++    p = nl + 1;
++  }
++}
++
++//  统计 db 的 stream 格式注册表条数，并给出 typeid 的 name/hash。
++//  这是判断"插件 dlopen 成功但没注册进去"的关键：注册表是
++//  std::map<std::type_index, RegistrarBase*>，比较走 type_info::before()，
++//  而 libc++abi 的 before() 是**指针比较**（__type_name 的地址）。
++//  若 -fvisibility=hidden 让各库的 RTTI name 符号不被动态合并，同一类型在
++//  主程序与插件里的 type_index 就**不相等**，插件注册到自己的键上、
++//  主程序查不到 → 格式表为空 → "Stream has unknown format"。
++static int ohos_format_count ()
++{
++  int n = 0;
++  for (tl::Registrar<db::StreamFormatDeclaration>::iterator it =
++         tl::Registrar<db::StreamFormatDeclaration>::begin ();
++       it != tl::Registrar<db::StreamFormatDeclaration>::end (); ++it) {
++    ++n;
++  }
++  return n;
++}
++
++static void ohos_dump_format_registry ()
++{
++  const std::type_info &ti = typeid (db::StreamFormatDeclaration);
++  char buf[64];
++  snprintf (buf, sizeof (buf), "%p", (const void *) ti.name ());
++  ohos_dbg (std::string ("[fmt] typeid name=") + ti.name () + " addr=" + buf
++            + " hash=" + std::to_string ((long long) ti.hash_code ()));
++  ohos_dbg ("[fmt] registered formats = " + std::to_string (ohos_format_count ()));
++  for (tl::Registrar<db::StreamFormatDeclaration>::iterator it =
++         tl::Registrar<db::StreamFormatDeclaration>::begin ();
++       it != tl::Registrar<db::StreamFormatDeclaration>::end (); ++it) {
++    ohos_dbg ("[fmt]   name='" + it->format_name () + "' file_format='"
++              + it->file_format () + "'");
++  }
++}
++
++//  打印 KLayout 实际使用的插件搜索根（klayout_path），并逐个 dlopen 插件目录里的
++//  .so，拿到失败时的精确 dlerror（KLayout 自己只把异常消息写进 tl::error）。
++//  顺带起到兜底作用：dlopen 成功即触发插件静态注册，格式表随之可用。
++static void ohos_dump_plugin_state ()
++{
++  lay::ApplicationBase *ab = lay::ApplicationBase::instance ();
++  if (ab) {
++    const std::vector<std::string> &kp = ab->klayout_path ();
++    ohos_dbg ("[plug] klayout_path entries=" + std::to_string (kp.size ()));
++    for (size_t i = 0; i < kp.size (); ++i) {
++      ohos_dbg ("[plug]   [" + std::to_string (i) + "] " + kp[i]);
++    }
++  } else {
++    ohos_dbg ("[plug] ApplicationBase::instance() == null");
++  }
++
++  const char *env = getenv ("KLAYOUT_PATH");
++  if (!env || !*env) { ohos_dbg ("[plug] KLAYOUT_PATH empty"); return; }
++  std::string base = std::string (env);
++  size_t col = base.find (':');
++  if (col != std::string::npos) { base = base.substr (0, col); }
++
++  const char *dirs[] = { "db_plugins", "lay_plugins", 0 };
++  for (int d = 0; dirs[d]; ++d) {
++    std::string dir = base + "/" + dirs[d];
++    QDir qd (QString::fromUtf8 (dir.c_str ()));
++    QStringList so = qd.entryList (QStringList () << QString::fromUtf8 ("*.so"),
++                                   QDir::Files, QDir::Name);
++    for (int i = 0; i < so.size (); ++i) {
++      std::string p = dir + "/" + so.at (i).toUtf8 ().constData ();
++      void *h = dlopen (p.c_str (), RTLD_NOW | RTLD_GLOBAL);
++      if (h) {
++        ohos_dbg (std::string ("[plug] dlopen OK  : ") + so.at (i).toUtf8 ().constData ());
++      } else {
++        const char *e = dlerror ();
++        ohos_dbg (std::string ("[plug] dlopen FAIL: ") + so.at (i).toUtf8 ().constData ()
++                  + " => " + std::string (e ? e : "?"));
++      }
++    }
++  }
++}
++#endif
+ 
+ #include "version.h"
+ 
+@@ -137,6 +300,9 @@
+ #else
+ 
+ int
++#if defined(Q_OS_OHOS)
++__attribute__((visibility("default")))
++#endif
+ main(int a_argc, const char **a_argv)
+ {
+   char **argv = new char *[a_argc];
+@@ -298,6 +464,29 @@
+   about_text += "\n";
+   about_text += "\n";
+   about_text += prg_about_text;
++
++#if defined(Q_OS_OHOS)
++  //  OHOS 移植版：在 Help -> About 里补充移植说明与开源合规信息。
++  //  为什么必须加：GPL-3.0 / LGPL-3.0 要求分发时保留版权与许可声明，华为上架审核也明确要求
++  //  「在应用内标注版权信息」。
++  //  源码仓库地址与《开源合规声明》第 5 节、公开仓库 README 保持一致
++  //  （2026-09-12 已核实为真实可访问的公开仓库）
++  about_text += "\n";
++  about_text += "\n";
++  about_text += "HarmonyOS (2in1) port\n";
++  about_text += "This is a port of KLayout 0.30.10 to HarmonyOS, built with Qt 5.12.12 (OpenHarmony).\n";
++  about_text += "KLayout is licensed under the GNU GPL v3; Qt is licensed under the LGPL v3.\n";
++  about_text += "Port source code, patches and build scripts (with all modifications):\n";
++  about_text += "  https://github.com/yangy79/KLayout-on-Harmony-PC\n";
++  about_text += "Upstream projects:\n";
++  about_text += "  https://www.klayout.de\n";
++  about_text += "  https://github.com/klayoutmatthias/klayout\n";
++  about_text += "\n";
++  about_text += "This program is distributed WITHOUT ANY WARRANTY;\n";
++  about_text += "without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n";
++  about_text += "Ruby/Python script engines are NOT included in this build (no DRC/LVS scripting, no macros).\n";
++#endif
++
+   lay::Version::set_about_text (about_text.c_str ());
+ 
+   //  Capture the shortcut command line arguments, log file and the verbosity settings
+@@ -343,6 +532,15 @@
+ int 
+ klayout_main_cont (int &argc, char **argv)
+ {
++#if defined(Q_OS_OHOS)
++    //  >>> OHOS-KLAYOUT-DIAG-A-BEGIN >>>
++    {
++      const char *home = getenv ("HOME");
++      ohos_dbg (std::string ("[boot] CONT_ENTERED @ ") + std::string (__TIME__)
++                + std::string (" HOME=") + std::string (home ? home : "(null)"));
++    }
++    //  <<< OHOS-KLAYOUT-DIAG-A-END <<<
++#endif
+ #if QT_VERSION >= 0x050000
+   qInstallMessageHandler (custom_message_handler);
+ #else
+@@ -376,8 +574,383 @@
+       lay::enable_signal_handler_gui (true);
+     }
+ 
++#if defined(Q_OS_OHOS)
++    //  过滤后的 argv 容器（需活过 parse_cmd 调用）
++    std::vector<char *> ohos_argv;
++    //  >>> OHOS-KLAYOUT-PATCH-BEGIN >>>
++    ohos_dbg (std::string ("[boot] PATCH_ENTERED @ ") + std::string (__TIME__)
++              + std::string (" cwd='") + std::string (QDir::currentPath ().toUtf8 ().constData ()) + std::string ("'"));
++
++    //  OHOS: stderr -> 沙箱文件 -> hilog 桥。
++    //  KLayout 的内部诊断（tl::error/tl::warn，例如插件加载失败的具体原因）只写
++    //  std::cerr；OHOS 上 app 的 stderr 既进不了 hilog，沙箱文件 hdc 也读不到。
++    //  这里把 fd2 重定向到沙箱内日志，再用定时器把内容转投 hilog（前缀 [stderr]），
++    //  否则插件/宏/reader 的失败原因完全不可见。
++    {
++      QString fd3 = QOhosAppContext::getProperty (QOhosAppContext::Type::filesDir);
++      if (!fd3.isEmpty ()) {
++        QDir ().mkpath (fd3 + QString::fromUtf8 ("/.klayout"));
++        s_err_path = (fd3 + QString::fromUtf8 ("/.klayout/boot_stderr.log")).toUtf8 ();
++        if (freopen (s_err_path.constData (), "w", stderr)) {
++          setvbuf (stderr, NULL, _IONBF, 0);
++          ohos_dbg (std::string ("[boot] stderr -> ") + s_err_path.constData ());
++          QTimer::singleShot (2500, [] () { ohos_dump_stderr (); });
++          QTimer::singleShot (7000, [] () {
++            ohos_dump_stderr ();
++            ohos_dump_plugin_state ();
++          });
++        }
++      }
++    }
++
++    //  OHOS: 手动加载 KLayout 的 stream 插件（GDS2/OASIS/CIF/... reader）。
++    //  这些 reader **不是**编在 libklayout_db.so 里，而是独立 .so 插件，正常由
++    //  init_app() 从 KLAYOUT_PATH/*/db_plugins 里 dlopen。但 OHOS 的安全策略
++    //  **禁止从用户可写分区 (el2/files) 加载 .so** —— 所以解包到 filesDir 的插件
++    //  全部失败（"Unable to load plugin"），格式注册表为空，任何文件都报
++    //  "Stream has unknown format"。
++    //  改从**应用安装目录**加载：el1/bundle/libs/arm64（libklayout.so 就在那里，
++    //  同目录的 .so 一定允许加载）。用 argv[0] 反推该目录，避免硬编码。
++    {
++      QString exe = argv[0] ? QString::fromUtf8 (argv[0]) : QString ();
++      QString libsdir = QFileInfo (exe).absolutePath ();
++      ohos_dbg (std::string ("[plug] libs dir='") + libsdir.toUtf8 ().constData () + "'");
++      const char *plugins[] = {
++        //  db_plugins 先加载（lay 插件依赖它们）
++        "libgds2.so", "liboasis.so", "libcif.so", "libdxf.so", "liblefdef.so",
++        "libmag.so", "libmaly.so", "libpcb.so", "libnet_tracer.so",
++        //  lay_plugins（提供 reader 选项对话框等 UI 部分）
++        "libcommon_ui.so", "libgds2_ui.so", "liboasis_ui.so", "libcif_ui.so",
++        "libdxf_ui.so", "liblefdef_ui.so", "libmag_ui.so", "libmaly_ui.so",
++        "libpcb_ui.so", "libimport_ui.so", "libnet_tracer_ui.so",
++        "libbool_ui.so", "libd25_ui.so", "libdensity_map_ui.so", "libdiff_ui.so",
++        "libxor_ui.so", 0
++      };
++      int nok = 0, nfail = 0;
++      ohos_dump_format_registry ();   // before
++      for (int i = 0; plugins[i]; ++i) {
++        QString p = libsdir + QString::fromUtf8 ("/") + QString::fromUtf8 (plugins[i]);
++        if (!QFileInfo (p).exists ()) { continue; }
++        void *h = dlopen (p.toUtf8 ().constData (), RTLD_NOW | RTLD_GLOBAL);
++        if (h) {
++          ++nok;
++          ohos_dbg (std::string ("[plug] ") + plugins[i] + " -> formats="
++                    + std::to_string (ohos_format_count ()));
++        } else {
++          ++nfail;
++          const char *e = dlerror ();
++          ohos_dbg (std::string ("[plug] fail ") + plugins[i] + " => "
++                    + std::string (e ? e : "?"));
++        }
++      }
++      ohos_dbg (std::string ("[plug] preloaded ok=") + std::to_string (nok)
++                + " fail=" + std::to_string (nfail));
++      ohos_dump_format_registry ();   // after
++    }
++
++    //  OHOS: 平台 style 插件（libqohosstyle.so）提供的是深色 palette，而 KLayout 0.30
++    //  本身没有内置 theme/dark-mode 机制，只按 palette 的颜色角色取色 —— 深色 palette 下
++    //  Window/WindowText、Base/Text 等角色没被正确区分，导致菜单、面板、工作区文字与
++    //  背景撞色而看不见。这里强制切换成浅色 Fusion 外观（Fusion 完全由 palette 驱动）。
++    {
++      QStringList styles = QStyleFactory::keys ();
++      ohos_dbg (std::string ("[boot] available styles: ")
++                + std::string (styles.join (QString::fromUtf8 (",")).toUtf8 ().constData ()));
++      if (styles.contains (QString::fromUtf8 ("Fusion"))) {
++        qApp->setStyle (QString::fromUtf8 ("Fusion"));
++        ohos_dbg ("[boot] style -> Fusion");
++      }
++
++      QPalette pal;
++      pal.setColor (QPalette::Window,                     QColor (240, 240, 240));
++      pal.setColor (QPalette::WindowText,                 QColor (0, 0, 0));
++      pal.setColor (QPalette::Disabled, QPalette::WindowText, QColor (120, 120, 120));
++      pal.setColor (QPalette::Base,                       QColor (255, 255, 255));
++      pal.setColor (QPalette::AlternateBase,              QColor (245, 245, 245));
++      pal.setColor (QPalette::ToolTipBase,                QColor (255, 255, 255));
++      pal.setColor (QPalette::ToolTipText,                QColor (0, 0, 0));
++      pal.setColor (QPalette::Text,                       QColor (0, 0, 0));
++      pal.setColor (QPalette::Disabled, QPalette::Text,   QColor (120, 120, 120));
++      pal.setColor (QPalette::Button,                     QColor (240, 240, 240));
++      pal.setColor (QPalette::ButtonText,                 QColor (0, 0, 0));
++      pal.setColor (QPalette::Disabled, QPalette::ButtonText, QColor (120, 120, 120));
++      pal.setColor (QPalette::BrightText,                 QColor (255, 255, 255));
++      pal.setColor (QPalette::Link,                       QColor (0, 0, 220));
++      pal.setColor (QPalette::Highlight,                  QColor (0, 120, 215));
++      pal.setColor (QPalette::HighlightedText,            QColor (255, 255, 255));
++      qApp->setPalette (pal);
++      ohos_dbg ("[boot] forced light palette");
++    }
++
++    {
++      auto probe = [] (const QString &p) {
++        QFileInfo fi (p);
++        ohos_dbg (std::string ("[boot] probe '") + std::string (p.toUtf8 ().constData ())
++                  + "' exists=" + (fi.exists () ? "1" : "0")
++                  + " readable=" + (fi.isReadable () ? "1" : "0")
++                  + " dir=" + (fi.isDir () ? "1" : "0"));
++      };
++
++      auto is_klayout_res = [] (const QString &d) -> bool {
++        QDir dir (d);
++        return dir.exists ()
++            && (dir.exists (QString::fromUtf8 ("tech"))
++                || dir.exists (QString::fromUtf8 ("macros"))
++                || dir.exists (QString::fromUtf8 ("drc")));
++      };
++
++      QString rd = QOhosAppContext::getProperty (QOhosAppContext::Type::resourceDir);
++      QString fd = QOhosAppContext::getProperty (QOhosAppContext::Type::filesDir);
++      ohos_dbg (std::string ("[boot] resourceDir='")
++                + std::string (rd.toUtf8 ().constData ()) + std::string ("'"));
++      ohos_dbg (std::string ("[boot] filesDir='")
++                + std::string (fd.toUtf8 ().constData ()) + std::string ("'"));
++
++      QString chosen;
++      if (!rd.isEmpty ()) {
++        QStringList candidates;
++        candidates << rd + QString::fromUtf8 ("/rawfile/klayout");
++        candidates << rd + QString::fromUtf8 ("/resfile/klayout");
++        candidates << rd + QString::fromUtf8 ("/klayout");
++        candidates << rd;
++        for (const QString &c : candidates) {
++          probe (c);
++          if (chosen.isEmpty () && is_klayout_res (c)) chosen = c;
++        }
++        if (chosen.isEmpty ()) {
++          QList<QDir> stack; stack.push_back (QDir (rd));
++          int depth = 0;
++          while (!stack.isEmpty () && depth < 5) {
++            QDir cur = stack.takeFirst ();
++            if (is_klayout_res (cur.path ())) { chosen = cur.path (); break; }
++            for (const QFileInfo &fi : cur.entryInfoList (QDir::Dirs | QDir::NoDotAndDotDot)) {
++              stack.push_back (QDir (fi.filePath ()));
++            }
++            ++depth;
++          }
++        }
++      }
++
++      if (chosen.isEmpty () && !fd.isEmpty ()) {
++        //  OHOS: 找不到内置资源树时也要给出非空路径。
++        //  关键 —— tl::get_inst_path() 在 OHOS 上取不到 app 路径会返回空串，
++        //  而 tl::absolute_file_path("") == current_dir() == "/" (getcwd 为 /)，
++        //  空路径进 KLAYOUT_PATH 后会被解析成 "/"，open("/") 被沙箱拒绝 -> errno=13。
++        QString fallback = fd + QString::fromUtf8 ("/.klayout");
++        QDir ().mkpath (fallback);
++        chosen = fallback;
++        ohos_dbg (std::string ("[boot] fallback resource dir='")
++                  + std::string (fallback.toUtf8 ().constData ()) + std::string ("'"));
++      }
++
++      if (!chosen.isEmpty () && !fd.isEmpty () && !chosen.startsWith (fd)) {
++        //  OHOS: 把只读的内置资源树解包到可写的 filesDir/.klayout。
++        //  resfile 解压目录是只读的，而 KLayout 会往资源树下写东西
++        //  （salt 包管理器、宏缓存、配置回写）。解包后 KLAYOUT_PATH 指向可写副本。
++        QString target = fd + QString::fromUtf8 ("/.klayout");
++        QByteArray want = (QString::fromUtf8 (__DATE__) + QString::fromUtf8 (__TIME__)).toUtf8 ();
++        QString stamp = target + QString::fromUtf8 ("/.res_stamp");
++
++        bool uptodate = false;
++        if (QFileInfo (stamp).exists ()) {
++          QFile sf (stamp);
++          if (sf.open (QIODevice::ReadOnly)) {
++            uptodate = (sf.readAll ().trimmed () == want.trimmed ());
++          }
++        }
++
++        if (uptodate) {
++          chosen = target;
++          ohos_dbg (std::string ("[boot] resource tree already unpacked -> ")
++                    + std::string (target.toUtf8 ().constData ()));
++        } else {
++          ohos_dbg (std::string ("[boot] unpacking '")
++                    + std::string (chosen.toUtf8 ().constData ()) + std::string ("' -> '")
++                    + std::string (target.toUtf8 ().constData ()) + std::string ("'"));
++          QList<QPair<QString, QString> > stack;
++          stack.push_back (qMakePair (chosen, target));
++          bool ok = true;
++          int nfiles = 0;
++          while (!stack.isEmpty () && ok) {
++            QPair<QString, QString> cur = stack.takeFirst ();
++            QDir sd (cur.first);
++            if (!sd.exists ()) { ok = false; break; }
++            if (!QDir ().mkpath (cur.second)) { ok = false; break; }
++            QFileInfoList entries = sd.entryInfoList (QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden);
++            for (QFileInfoList::const_iterator it = entries.begin (); it != entries.end () && ok; ++it) {
++              QString dp = cur.second + QString::fromUtf8 ("/") + it->fileName ();
++              if (it->isDir ()) {
++                stack.push_back (qMakePair (it->filePath (), dp));
++              } else {
++                if (QFileInfo (dp).exists ()) {
++                  QFile::remove (dp);
++                }
++                if (QFile::copy (it->filePath (), dp)) {
++                  ++nfiles;
++                } else {
++                  ohos_dbg (std::string ("[boot] unpack FAILED: ")
++                            + std::string (it->filePath ().toUtf8 ().constData ()));
++                  ok = false;
++                }
++              }
++            }
++          }
++          if (ok) {
++            QFile sf (stamp);
++            if (sf.open (QIODevice::WriteOnly | QIODevice::Truncate)) {
++              sf.write (want);
++            }
++            chosen = target;
++            ohos_dbg (std::string ("[boot] unpack OK, files=") + std::to_string (nfiles)
++                      + std::string (" -> ") + std::string (target.toUtf8 ().constData ()));
++          } else {
++            ohos_dbg (std::string ("[boot] WARN unpack failed (files=")
++                      + std::to_string (nfiles) + std::string ("), fall back to read-only tree"));
++          }
++        }
++      }
++
++      if (!chosen.isEmpty ()) {
++        std::string new_path = std::string (chosen.toUtf8 ().constData ());
++        const char *existing = getenv ("KLAYOUT_PATH");
++        if (existing && *existing) {
++          new_path += std::string (":") + std::string (existing);
++        }
++        tl::set_env ("KLAYOUT_PATH", new_path);
++        ohos_dbg (std::string ("[boot] KLAYOUT_PATH='") + new_path + std::string ("'"));
++      } else {
++        ohos_dbg ("[boot] WARN: could not locate bundled resource tree");
++      }
++
++      if (!getenv ("KLAYOUT_HOME")) {
++        if (!fd.isEmpty ()) {
++          QString home = fd + QString::fromUtf8 ("/.klayout");
++          QDir ().mkpath (home);
++          tl::set_env ("KLAYOUT_HOME", std::string (home.toUtf8 ().constData ()));
++          probe (home);
++          ohos_dbg (std::string ("[boot] KLAYOUT_HOME='")
++                    + std::string (home.toUtf8 ().constData ()) + std::string ("'"));
++        }
++      } else {
++        ohos_dbg (std::string ("[boot] KLAYOUT_HOME already set='")
++                  + std::string (getenv ("KLAYOUT_HOME")) + std::string ("'"));
++      }
++    }
++    ohos_dbg ("[boot] PATCH_DONE");
++
++    //  OHOS: 清掉 libqohos 塞进来的多余 argv 项。
++    //  KLayout 把任何非选项参数当作"要打开的版图文件"(layApplication.cc 的 m_files)，
++    //  启动时会 mw->load_layout(<该参数>)；空串经 tl::absolute_file_path 变成 cwd('/')，
++    //  再 open("/") 被沙箱拒绝 -> "Unable to open file: / (errno=13)"。
++    {
++      std::string all;
++      for (int i = 0; i < argc; ++i) {
++        all += std::string ("[") + std::to_string (i) + std::string ("]=")
++             + std::string (argv[i] ? argv[i] : "(null)") + std::string (" ");
++      }
++      ohos_dbg (std::string ("[boot] argv: ") + all);
++
++      ohos_argv.push_back (argv[0]);
++      for (int i = 1; i < argc; ++i) {
++        const char *a = argv[i];
++        if (!a) { continue; }
++        bool is_opt = (a[0] == '-');
++        bool prev_is_opt = !ohos_argv.empty () && ohos_argv.back () && ohos_argv.back ()[0] == '-';
++        bool exists = QFileInfo (QString::fromUtf8 (a)).exists ();
++        if (is_opt || prev_is_opt || (exists && *a)) {
++          ohos_argv.push_back (argv[i]);
++        } else {
++          ohos_dbg (std::string ("[boot] drop argv[") + std::to_string (i)
++                    + std::string ("]='") + std::string (a) + std::string ("'"));
++        }
++      }
++      ohos_dbg (std::string ("[boot] argv filtered: ") + std::to_string (argc)
++                + std::string (" -> ") + std::to_string (ohos_argv.size ()));
++    }
++
++    //  OHOS: 刻意**不**自动打开任何文件 —— 启动后停在空视图（"Use File/Open to open a layout"），
++    //  由用户自己 File->Open 选择。
++    //  注：曾实现过"启动即自动打开内置示例版图"（探测 filesDir/.klayout/demo + 校验 GDSII 魔数
++    //  + 追加进 argv），按用户要求已于 2026-09-12 移除。
++
++    //  OHOS: 清理历史遗留的插件目录（避免启动刷屏 + 无效 dlopen 尝试）。
++    //  背景 —— KLayout 的 GDS2/OASIS/CIF/... reader 是独立插件 .so，由
++    //  lay::ApplicationBase::init_app() 扫描 <KLAYOUT_PATH>/db_plugins/ 加载。
++    //  但 **OHOS 禁止从用户可写分区（el2）dlopen .so**，所以本构建把 25 个插件放进
++    //  应用安装目录（el1）bundle/libs/arm64 顶层，在下方显式 dlopen 预加载；
++    //  GDS2 更是直接编进了 libklayout.so（其静态注册在本机构建下不执行）。
++    //  早期版本曾把它们解包到 filesDir/.klayout/{db,lay}_plugins —— 那些残留目录
++    //  KLayout 内部仍会去扫，每次启动刷几十行 "ERROR: Unable to load plugin"。
++    //  这里在 init_app() 之前把残留目录删掉；插件功能已由预加载 + 主库内置完全覆盖。
++    {
++      const char *kp = getenv ("KLAYOUT_PATH");
++      QString base = kp ? QString::fromUtf8 (kp) : QString ();
++      int colon = base.indexOf (QChar (':'));
++      if (colon >= 0) { base = base.left (colon); }
++      if (!base.isEmpty ()) {
++        const char *dirs[] = { "db_plugins", "lay_plugins", nullptr };
++        for (int i = 0; dirs[i]; ++i) {
++          QDir d (base + QChar ('/') + QString::fromUtf8 (dirs[i]));
++          if (d.exists ()) {
++            bool ok = d.removeRecursively ();
++            ohos_dbg (std::string ("[boot] purge stale plugin dir '") + dirs[i]
++                      + "' under KLAYOUT_PATH -> " + (ok ? "removed" : "FAILED"));
++          }
++        }
++      }
++    }
++
++    //  >>> OHOS-KLAYOUT-DIAG-C-BEGIN >>>
++    //  延迟到主窗口建好后探测：图标资源能否解析、工具栏按钮图标是否为空。
++    {
++      QTimer::singleShot (6000, [] () {
++        const char *tests[] = {
++          ":/back_24px.png", ":/forward_24px.png", ":/select_24px.png",
++          "/back_24px.png", "back_24px.png", nullptr
++        };
++        for (int i = 0; tests[i]; ++i) {
++          QIcon ic (QString::fromLatin1 (tests[i]));
++          ohos_dbg (std::string ("[icon] QIcon('") + tests[i] + "') null="
++                    + (ic.isNull () ? "1" : "0") + " sizes="
++                    + std::to_string ((int) ic.availableSizes ().size ()));
++        }
++        {
++          QFile f (QString::fromUtf8 (":/back_24px.png"));
++          ohos_dbg (std::string ("[icon] QFile(':/back_24px.png') exists=")
++                    + (f.exists () ? "1" : "0"));
++        }
++        const QWidgetList tops = QApplication::topLevelWidgets ();
++        for (QWidget *w : tops) {
++          QMainWindow *mw = qobject_cast<QMainWindow *> (w);
++          if (! mw) { continue; }
++          ohos_dbg (std::string ("[icon] main window: ") + mw->windowTitle ().toUtf8 ().constData ());
++          const QList<QToolBar *> tbs = mw->findChildren<QToolBar *> ();
++          for (QToolBar *tb : tbs) {
++            const QList<QAction *> acts = tb->actions ();
++            for (QAction *a : acts) {
++              if (a->isSeparator ()) { continue; }
++              ohos_dbg (std::string ("[icon] tb '") + a->text ().toUtf8 ().constData ()
++                        + "' obj='" + a->objectName ().toUtf8 ().constData ()
++                        + "' null=" + (a->icon ().isNull () ? "1" : "0"));
++            }
++          }
++        }
++      });
++    }
++    //  <<< OHOS-KLAYOUT-DIAG-C-END <<<
++    //  <<< OHOS-KLAYOUT-PATCH-END <<<
++#endif
++
+     //  configures the application with the command line arguments
+-    app->parse_cmd (argc, argv);
++    {
++      int pc_argc = argc;
++      char **pc_argv = argv;
++#if defined(Q_OS_OHOS)
++      pc_argc = (int) ohos_argv.size ();
++      pc_argv = ohos_argv.data ();
++#endif
++      app->parse_cmd (pc_argc, pc_argv);
++    }
+ 
+     //  initialize the application
+     app->init_app ();
+--- a/src/klayout_main/klayout_main/klayout_main.pro
++++ b/src/klayout_main/klayout_main/klayout_main.pro
+@@ -4,6 +4,11 @@
+ include($$PWD/../../klayout.pri)
+ 
+ TARGET = klayout
++# OHOS: QtCore private headers (QOhosAppContext::getProperty)
++INCLUDEPATH += $$[QT_INSTALL_HEADERS]/QtCore/$$QT_VERSION/QtCore/private
++# OHOS: keep klayout_main_cont (and the resource-path patch) reachable
++# (must use a non-empty 3rd arg: qmake's replace() rejects an empty one)
++QMAKE_LFLAGS = $$replace(QMAKE_LFLAGS, -Wl,--gc-sections, -Wl,--no-gc-sections)
+ 
+ include($$PWD/../../app.pri)
+ include($$PWD/../../with_all_libs.pri)
+@@ -25,3 +30,34 @@
+ DEPENDPATH += $$DOC_INC $$ICONS_INC $$QTBASIC_INC
+ 
+ LIBS += -lklayout_doc -lklayout_icons
++
++# OHOS: export 'main' so libqohos.so dlsym("main") can start KLayout
++# (Qt OHOS mkspec compiles with -fvisibility=hidden, hiding main)
++QMAKE_LFLAGS += -Wl,--export-dynamic
++
++# OHOS: 把 GDS2 reader 直接编进来（不再依赖 db_plugins 插件机制）。
++# 实测原因 —— GDS2 是独立插件 libgds2.so，靠文件末尾的静态对象
++#   static tl::RegisteredClass<db::StreamFormatDeclaration> format_decl (..., "GDS2");
++# 自我注册。但本机构建下该静态构造没有执行：同一写法、同一位置，
++# CIF/OASIS/DXF/LEF-DEF/MAG/MALY/PCB 七个插件加载后格式表都 +1，
++# 唯独 GDS2 加载后条数纹丝不动（诊断日志 `libgds2.so -> formats=1` 不增长），
++# 于是任何 .gds 都报 "Stream has unknown format" —— 有明确 .gds 后缀时
++# KLayout 只做后缀匹配、不做内容探测，故必失败。
++# 编进 libklayout.so 可绕开该问题：注册与查询同进程、同注册表，无加载时序依赖。
++# 注：跳过 gsiDeclDbGDS2.cc（仅 Ruby/Python 绑定声明，本构建 -nopython -noruby
++# -without-qtbinding 不需要）。
++GDS2_SRC = $$PWD/../../plugins/streamers/gds2/db_plugin
++#  dbPluginCommon.h 在 src/plugins/common（db_plugin.pri 里也是这么加的）
++INCLUDEPATH += $$GDS2_SRC $$GDS2_SRC/contrib $$PWD/../../plugins/common
++DEPENDPATH  += $$GDS2_SRC $$GDS2_SRC/contrib $$PWD/../../plugins/common
++SOURCES += \
++  $$GDS2_SRC/dbGDS2.cc \
++  $$GDS2_SRC/dbGDS2ReaderBase.cc \
++  $$GDS2_SRC/dbGDS2Reader.cc \
++  $$GDS2_SRC/dbGDS2WriterBase.cc \
++  $$GDS2_SRC/dbGDS2Writer.cc \
++  $$GDS2_SRC/contrib/dbGDS2Converter.cc \
++  $$GDS2_SRC/contrib/dbGDS2Text.cc \
++  $$GDS2_SRC/contrib/dbGDS2TextReader.cc \
++  $$GDS2_SRC/contrib/dbGDS2TextWriter.cc
++
+--- a/src/lay/lay/layMainWindow.cc
++++ b/src/lay/lay/layMainWindow.cc
+@@ -346,6 +346,19 @@
+   addDockWidget(Qt::RightDockWidgetArea, mp_bm_dock_widget);
+   addDockWidget(Qt::RightDockWidgetArea, mp_lp_dock_widget);
+   addDockWidget(Qt::RightDockWidgetArea, mp_layer_toolbox_dock_widget);
++
++#if defined(Q_OS_OHOS)
++  //  The OHOS platform style reports very small size hints for the dock
++  //  widgets, so the side bars get squeezed and their titles are elided
++  //  ("Layers" -> "La...", "Libraries" -> "Lib..."). Enforce usable widths.
++  mp_navigator_dock_widget->setMinimumWidth (280);
++  mp_hp_dock_widget->setMinimumWidth (280);
++  mp_libs_dock_widget->setMinimumWidth (280);
++  mp_eo_dock_widget->setMinimumWidth (280);
++  mp_bm_dock_widget->setMinimumWidth (280);
++  mp_lp_dock_widget->setMinimumWidth (280);
++  mp_layer_toolbox_dock_widget->setMinimumWidth (280);
++#endif
+ 
+   mp_tool_bar = new QToolBar (this);
+   mp_tool_bar->setWindowTitle (QObject::tr ("Toolbar"));
+--- a/src/laybasic/laybasic/layAbstractMenu.cc
++++ b/src/laybasic/laybasic/layAbstractMenu.cc
+@@ -1005,9 +1005,36 @@
+   if (qaction ()) {
+     if (filename.empty ()) {
+       qaction ()->setIcon (QIcon ());
+-    } else {
+-      qaction ()->setIcon (QIcon (tl::to_qstring (filename)));
+-    }
++      m_icon.clear ();
++      return;
++    }
++    QString fn = tl::to_qstring (filename);
++    QIcon icon (fn);
++    //  NOTE: QIcon::isNull() is false even when the path cannot be resolved
++    //  (the icon still carries a filename), so probe for an actual pixmap.
++    if (icon.pixmap (QSize (16, 16)).isNull ()) {
++      //  Some menu titles use the "<:/foo_24px.png>" form which parses into
++      //  the absolute path "/foo_24px.png"; the plain "<:foo_24px.png>" form
++      //  yields a relative path. Neither resolves on OHOS, so those icons end
++      //  up blank (e.g. Back/Forward and the combine-mode icons). Both are
++      //  meant to be Qt resources - retry with the proper ":/" form.
++      QString alt;
++      if (fn.startsWith (QLatin1Char ('/'))) {
++        alt = QLatin1Char (':') + fn;
++      } else if (! fn.contains (QLatin1Char (':'))) {
++        alt = QLatin1String (":/") + fn;
++      }
++      if (! alt.isEmpty ()) {
++        QIcon alt_icon (alt);
++        if (! alt_icon.pixmap (QSize (16, 16)).isNull ()) {
++          icon = alt_icon;
++          fn = alt;
++        }
++      }
++    }
++    qaction ()->setIcon (icon);
++    m_icon = std::string (fn.toUtf8 ().constData ());
++    return;
+   }
+ #endif
+   m_icon = filename;
+--- a/src/plugins/db_plugin.pri
++++ b/src/plugins/db_plugin.pri
+@@ -2,6 +2,13 @@
+ include($$PWD/../klayout.pri)
+ 
+ TEMPLATE = lib
++
++# OHOS: 关闭 gc-sections。
++# 插件的格式注册对象是纯静态构造（如 GDS2 的 format_decl），源码中没有外部
++# 引用；-Wl,--gc-sections 会把它的构造从 .init_array 里剔除 —— 结果是插件
++# dlopen 成功却从未注册，主程序报 "Stream has unknown format"。
++QMAKE_LFLAGS += -Wl,--no-gc-sections
++
+ 
+ INCLUDEPATH += $$DB_INC $$TL_INC $$GSI_INC $$PWD/common
+ DEPENDPATH += $$DB_INC $$TL_INC $$GSI_INC $$PWD/common
+--- a/src/plugins/lay_plugin.pri
++++ b/src/plugins/lay_plugin.pri
+@@ -2,6 +2,13 @@
+ include($$PWD/../klayout.pri)
+ 
+ TEMPLATE = lib
++
++# OHOS: 关闭 gc-sections。
++# 插件的格式注册对象是纯静态构造（如 GDS2 的 format_decl），源码中没有外部
++# 引用；-Wl,--gc-sections 会把它的构造从 .init_array 里剔除 —— 结果是插件
++# dlopen 成功却从未注册，主程序报 "Stream has unknown format"。
++QMAKE_LFLAGS += -Wl,--no-gc-sections
++
+ 
+ INCLUDEPATH += $$DB_INC $$TL_INC $$GSI_INC $$LAYBASIC_INC $$LAYUI_INC $$LAYVIEW_INC $$LAYUI_INC $$LAY_INC $$PWD/common
+ DEPENDPATH += $$DB_INC $$TL_INC $$GSI_INC $$LAYBASIC_INC $$LAYUI_INC $$LAYVIEW_INC $$LAYUI_INC $$LAY_INC $$PWD/common
+--- a/src/tl/tl/tlStream.cc
++++ b/src/tl/tl/tlStream.cc
+@@ -43,6 +43,57 @@
+ #include "tlResources.h"
+ #include "tlBase64.h"
+ #include "tlException.h"
++
++#ifdef __OHOS__
++// >>> OHOS-DIAG-STREAM: 把 "Unable to open file" 的失败路径 + errno 打到 hilog <<<
++// (KLayout 的 Qt message handler 只写 stderr，OHOS 上 stderr 不进 hilog，
++//  故这里用 dlopen 动态解析 OH_LOG_Print，不新增 DT_NEEDED 依赖)
++#  include <dlfcn.h>
++static void ohos_stream_dbg_ (const char *msg)
++{
++  typedef void (*ohlog_t) (int, int, unsigned int, const char *, const char *, ...);
++  static ohlog_t s_log = 0;
++  static int s_state = 0;
++  if (s_state == 0) {
++    s_state = 1;
++    void *h = dlopen ("libhilog_ndk.z.so", RTLD_NOW | RTLD_GLOBAL);
++    if (!h) h = dlopen ("/system/lib64/libhilog_ndk.z.so", RTLD_NOW | RTLD_GLOBAL);
++    if (h) s_log = (ohlog_t) dlsym (h, "OH_LOG_Print");
++  }
++  if (s_log) s_log (0, 6 /*LOG_ERROR*/, 0xD001400u, "KLAYOUT_OHOS", "%{public}s", msg);
++}
++
++//  Mini backtrace: 用 __builtin_return_address + dladdr 定位是谁打开了失败的文件。
++//  同时输出相对模块基址的偏移，便于离线用 llvm-nm 反查（即使符号被裁）。
++static void ohos_stream_bt_ (const char *path, int en)
++{
++  char buf[1024];
++  int n = snprintf (buf, sizeof (buf), "[stream] FileOpenError path=%s errno=%d |", path, en);
++
++  void *ips[4];
++  ips[0] = __builtin_return_address (0);
++  ips[1] = __builtin_return_address (1);
++  ips[2] = __builtin_return_address (2);
++  ips[3] = __builtin_return_address (3);
++
++  for (int i = 0; i < 4 && n < (int) sizeof (buf) - 64; ++i) {
++    if (! ips[i]) { continue; }
++    Dl_info di;
++    if (dladdr (ips[i], &di)) {
++      const char *base_name = di.dli_fname ? di.dli_fname : "?";
++      const char *slash = strrchr (base_name, '/');
++      if (slash) { base_name = slash + 1; }
++      unsigned long off = (unsigned long) ((char *) ips[i] - (char *) di.dli_fbase);
++      n += snprintf (buf + n, sizeof (buf) - n, " [%d]%s:%s+0x%lx", i, base_name,
++                     (di.dli_sname ? di.dli_sname : "?"), off);
++    } else {
++      n += snprintf (buf + n, sizeof (buf) - n, " [%d]%p", i, ips[i]);
++    }
++  }
++
++  ohos_stream_dbg_ (buf);
++}
++#endif
+ #include "tlString.h"
+ #include "tlUri.h"
+ #include "tlHttpStream.h"
+@@ -101,7 +152,15 @@
+ public:
+   FileOpenErrorException (const std::string &f, int en)
+     : tl::Exception (tl::to_string (tr ("Unable to open file: %s (errno=%d)")), f, en)
+-  { }
++  {
++#ifdef __OHOS__
++    // >>> OHOS-DIAG-STREAM >>>
++    {
++      ohos_stream_bt_ (f.c_str (), en);
++    }
++    // <<< OHOS-DIAG-STREAM <<<
++#endif
++  }
+ };
+ 
+ class FilePOpenErrorException

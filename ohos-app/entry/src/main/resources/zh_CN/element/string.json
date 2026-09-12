@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "KLayout 鸿蒙版主模块"
+    },
+    {
+      "name": "QAbility_desc",
+      "value": "KLayout 版图查看与编辑主窗口"
+    },
+    {
+      "name": "QAbility_label",
+      "value": "KLayout"
+    }
+  ]
+}

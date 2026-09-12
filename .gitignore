@@ -1,0 +1,40 @@
+# ---- 构建中间产物 / 产物（不入库）----
+build-ohos/
+bin-ohos/
+build-arm64/
+install/
+*.o
+*.so
+*.a
+*.hap
+*.app
+
+# ---- HarmonyOS / DevEco ----
+.hvigor/
+oh_modules/
+node_modules/
+.cxx/
+entry/libs/
+ohos-app/entry/libs/
+ohos-app/entry/build/
+ohos-app/entry/src/main/resources/resfile/
+
+# ---- 签名材料与密钥（绝不入库）----
+*.p12
+*.p7b
+*.csr
+*.cer
+*.jks
+*.keystore
+key.pem
+*-key.pem
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ---- 日志与临时文件 ----
+*.log
+.qmake.stash

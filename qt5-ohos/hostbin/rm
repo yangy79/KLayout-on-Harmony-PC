@@ -1,0 +1,5 @@
+#!/bin/sh
+# WorkBuddy 注入的 shim/safe-bin/rm 是坏脚本（bad interpreter），
+# 会让 Qt 构建的 Makefile 中以 rm -f 开头的规则全部 Error 127。
+# 此处转发给系统真实 rm（toybox）。
+exec /bin/rm "$@"

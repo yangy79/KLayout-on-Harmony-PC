@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<klayout-macro>
+ <description/>
+ <version/>
+ <category/>
+ <prolog/>
+ <epilog/>
+ <doc/>
+ <autorun>false</autorun>
+ <autorun-early>true</autorun-early>
+ <shortcut/>
+ <show-in-menu>false</show-in-menu>
+ <group-name/>
+ <menu-path/>
+ <interpreter>ruby</interpreter>
+ <dsl-interpreter-name/>
+ <text>
+module DRC
+
+  class DRCExecutable &lt; RBA::Executable
+
+    def initialize(macro, interpreter, generator, rdb_index = nil)
+
+      @drc = DRCEngine::new
+      @drc._rdb_index = rdb_index
+      @drc._generator = generator
+
+      @macro = macro
+
+      @interpreter = interpreter
+
+    end
+
+    def execute
+
+      @drc._start("DRC: " + @macro.path)
+
+      # Set a debugger scope so that our errors end up with the debugger set to the DRC's line
+      RBA::MacroExecutionContext::set_debugger_scope(@macro.path)
+
+      begin
+
+        encoded_file, expanded_text = @interpreter.include_expansion(@macro)
+
+        # No verbosity set in drc engine - we cannot use the engine's logger 
+        RBA::Logger::verbosity &gt;= 10 &amp;&amp; RBA::Logger::info("Running #{@macro.path}")
+        @drc.instance_eval(expanded_text, encoded_file)
+
+      rescue =&gt; ex
+
+        @drc.error("In #{@macro.path}: #{ex.to_s}")
+        RBA::MacroExecutionContext::ignore_next_exception
+        raise ex
+
+      end
+
+      nil
+
+    end
+
+    def cleanup
+
+      # Remove the debugger scope
+      RBA::MacroExecutionContext::remove_debugger_scope
+
+      # cleans up and creates layout and report views
+      @drc._finish
+
+    end
+
+  end
+  
+  # A recipe implementation allowing the DRC run to be redone
+  class DRCRecipe &lt; RBA::Recipe
+
+    def initialize(interpreter)
+
+      super("drc", "DRC recipe")
+
+      @interpreter = interpreter
+
+    end
+
+    def executable(params)
+
+      script = params["script"]
+      if ! script
+        return
+      end
+
+      macro = RBA::Macro::macro_by_path(script)
+      macro || raise("Can't find DRC script #{script} - unable to re-run")
+
+      DRCExecutable::new(macro, @interpreter, self.generator("script" => script), params["rdb_index"])
+      
+    end
+
+  end
+  
+  # A DSL implementation for a DRC language (XML format)
+  class DRCInterpreter &lt; RBA::MacroInterpreter
+  
+    # Constructor
+    def initialize
+
+      @recipe = DRCRecipe::new(self)
+
+      # Make the DSL use ruby syntax highlighting
+      self.syntax_scheme = "ruby"
+      self.suffix = "lydrc"
+      self.debugger_scheme = RBA::MacroInterpreter::RubyDebugger
+      self.storage_scheme = RBA::MacroInterpreter::MacroFormat
+      self.description = "DRC"
+
+      # Registers the new interpreter
+      register("drc-dsl-xml")
+
+      # create a template for the macro editor:
+      create_template(":/drc-templates/drc.lym")
+
+      # if available, create a menu branch
+      if RBA.constants.member?(:Application) &amp;&amp; RBA::Application::instance &amp;&amp; RBA::Application::instance.main_window
+        mw = RBA::Application::instance.main_window
+        mw.menu.insert_menu("tools_menu.verification_group+", "drc", "DRC")
+      end
+
+    end
+    
+    # Implements the execute method
+    def executable(macro)
+      DRCExecutable::new(macro, self, @recipe.generator("script" => macro.path))
+    end
+    
+  end
+  
+  # A DSL implementation for a DRC language (Plain text format)
+  class DRCPlainTextInterpreter &lt; RBA::MacroInterpreter
+  
+    # Constructor
+    def initialize
+
+      @recipe = DRCRecipe::new(self)
+
+      # Make the DSL use ruby syntax highlighting
+      self.syntax_scheme = "ruby"
+      self.suffix = "drc"
+      self.debugger_scheme = RBA::MacroInterpreter::RubyDebugger
+      self.storage_scheme = RBA::MacroInterpreter::PlainTextWithHashAnnotationsFormat
+      self.description = "DRC (Text)"
+
+      # Registers the new interpreter
+      register("drc-dsl")
+
+    end
+    
+    # Implements the execute method
+    def executable(macro)
+      DRCExecutable::new(macro, self, @recipe.generator("script" => macro.path))
+    end
+    
+  end
+  
+  # Register the new interpreters
+  DRCInterpreter::new
+  DRCPlainTextInterpreter::new
+
+  # Creates a new macro category
+  if RBA.constants.member?(:Application) &amp;&amp; RBA::Application::instance 
+    RBA::Application::instance.add_macro_category("drc", "DRC", [ "drc" ])
+  end
+ 
+end
+</text>
+</klayout-macro>
+

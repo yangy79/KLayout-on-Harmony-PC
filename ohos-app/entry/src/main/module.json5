@@ -1,0 +1,90 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "srcEntry": "./ets/qabilitystage/QAbilityStage.ets",
+    "description": "$string:module_desc",
+    "mainElement": "QAbility",
+    // 上架声明：仅 2in1（PC 形态）—— 与实测通过的形态保持一致，
+    // 避免审核质疑"声明支持但未提供对应形态"。
+    // 注：Qt 侧已知问题 QTFOROH-1076（清单含 phone 时窗口最小化后不恢复）与本收窄无关；
+    //     将来若要扩 tablet/phone，需先实测通过并补对应形态的商店截图。
+    "deviceTypes": [
+      "2in1"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "extensionAbilities": [
+      {
+        "name": "QEmbeddedUiExtensionAbility",
+        "srcEntry": "./ets/qability/QEmbeddedUiExtensionAbility.ets",
+        "icon": "$media:layered_image",
+        "type": "embeddedUI",
+        "description": "",
+        "exported": true,
+        "extensionProcessMode": "instance"
+      },
+      {
+        "name": "QBundledEmbeddedUiExtensionAbility",
+        "srcEntry": "./ets/qability/QBundledEmbeddedUiExtensionAbility.ets",
+        "icon": "$media:layered_image",
+        "type": "embeddedUI",
+        "description": "",
+        "exported": true,
+        "extensionProcessMode": "bundle"
+      }
+    ],
+    "abilities": [
+      {
+        "name": "QAbility",
+        "srcEntry": "./ets/qability/QAbility.ets",
+        "launchType": "specified",
+        "description": "$string:QAbility_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:QAbility_label",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "isolationProcess": true,
+        "skills": [
+          {
+            "entities": [
+              "entity.system.home"
+            ],
+            "actions": [
+              "action.system.home",
+              "ohos.want.action.sendData",
+            ],
+            "uris": [
+              {
+                "scheme": "file",
+                "utd": "general.text",
+                "maxFileSupported": 10
+              },
+              {
+                "scheme": "file",
+                "utd": "general.png",
+                "maxFileSupported": 10
+              },
+              {
+                "scheme": "file",
+                "utd": "general.jpeg",
+                "maxFileSupported": 10
+              },
+            ]
+          }
+        ],
+        "metadata": [
+          {
+            "name": 'enable.remove.starting.window',
+            "value": 'true'
+          }
+        ],
+        "continuable": true
+      }
+    ],
+    "requestPermissions": [
+    ]
+  }
+}

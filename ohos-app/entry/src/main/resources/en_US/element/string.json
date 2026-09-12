@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "KLayout for HarmonyOS entry module"
+    },
+    {
+      "name": "QAbility_desc",
+      "value": "KLayout layout viewer and editor main window"
+    },
+    {
+      "name": "QAbility_label",
+      "value": "KLayout"
+    }
+  ]
+}
