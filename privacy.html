@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KLayout 隐私政策</title>
+<link rel="alternate" hreflang="en" href="privacy-en.html">
+<style>
+  :root{
+    --bg:#ffffff; --fg:#202124; --sub:#5f6368; --line:#e3e6ea;
+    --accent:#0A59F7; --card:#f7f8fa;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:0; background:var(--bg); color:var(--fg);
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    line-height:1.85; font-size:16px;
+  }
+  .wrap{max-width:820px; margin:0 auto; padding:48px 24px 96px}
+  header{border-bottom:1px solid var(--line); padding-bottom:24px; margin-bottom:36px}
+  h1{font-size:30px; margin:0 0 12px; letter-spacing:.5px}
+  .meta{color:var(--sub); font-size:14px}
+  .meta span{margin-right:20px; display:inline-block}
+  h2{font-size:20px; margin-top:44px; margin-bottom:12px; padding-left:12px; border-left:4px solid var(--accent)}
+  h3{font-size:16px; margin-top:24px; margin-bottom:8px; color:var(--fg)}
+  p{margin:12px 0}
+  ul{margin:12px 0; padding-left:22px}
+  li{margin:6px 0}
+  .box{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:20px 0}
+  .box strong{color:var(--accent)}
+  code{background:var(--card); padding:2px 6px; border-radius:4px; font-size:14px;
+      font-family:"JetBrains Mono",Menlo,Consolas,monospace}
+  table{width:100%; border-collapse:collapse; margin:18px 0; font-size:15px}
+  th,td{border:1px solid var(--line); padding:10px 12px; text-align:left}
+  th{background:var(--card); font-weight:600}
+  footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--line);
+         color:var(--sub); font-size:14px}
+  .toc{background:var(--card); border-radius:10px; padding:16px 20px; margin:28px 0}
+  .toc a{color:var(--accent); text-decoration:none; margin-right:16px; display:inline-block; line-height:2}
+  .lang{float:right; font-size:14px}
+  .lang a{color:var(--accent); text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="lang"><a href="privacy-en.html">English</a></div>
+  <h1>KLayout 隐私政策</h1>
+  <div class="meta">
+    <span>生效日期：2026 年 9 月 12 日</span>
+    <span>最近更新：2026 年 9 月 12 日</span>
+    <span>适用版本：KLayout 1.0.0（HarmonyOS）</span>
+    <span>开发者：yangy79</span>
+    <span>联系邮箱：295399759@qq.com</span>
+  </div>
+</header>
+
+<div class="box">
+  <strong>一句话概述：</strong>KLayout 是一款<strong>完全离线</strong>的版图（GDS/OASIS/CIF/DXF 等）查看与编辑工具。
+  它<strong>不联网、不申请任何系统权限、不收集、不上传、不共享</strong>您的任何个人信息或文件内容。
+  没有账号体系，没有统计、广告或任何第三方 SDK，所有数据都只留在您自己的设备上。
+</div>
+
+<div class="toc">
+  <a href="#s1">一、核心结论</a>
+  <a href="#s2">二、我们如何处理您的信息</a>
+  <a href="#s3">三、数据安全</a>
+  <a href="#s4">四、您的权利</a>
+  <a href="#s5">五、未成年人保护</a>
+  <a href="#s6">六、本政策的变更</a>
+  <a href="#s7">七、联系我们</a>
+</div>
+
+<h2 id="s1">一、核心结论</h2>
+<p>本隐私政策适用于 HarmonyOS 应用 <strong>KLayout</strong>（应用包名：<code>com.yangy79.klayout</code>，以下简称"本应用"）。</p>
+<p>本应用是一款纯离线的版图查看与编辑工具，<strong>不联网、不申请任何系统权限、不收集、不上传、不共享您的任何个人信息或文件内容。</strong></p>
+
+<h2 id="s2">二、我们如何处理您的信息</h2>
+
+<h3>2.1 我们不收集的信息</h3>
+<p>本应用<strong>不会</strong>收集、读取或上传以下任何内容：</p>
+<ul>
+  <li>个人身份信息（姓名、手机号、邮箱、账号、设备标识符等）</li>
+  <li>您的位置信息</li>
+  <li>您打开、编辑或保存的任何版图（GDS/OASIS/CIF/DXF 等）文件的<strong>内容</strong></li>
+  <li>您的通讯录、短信、通话记录、相册、麦克风、摄像头数据</li>
+  <li>应用使用行为、崩溃日志、埋点统计数据</li>
+</ul>
+
+<h3>2.2 仅在本机范围内处理的信息</h3>
+<p>为完成"版图查看与编辑"这一核心功能，本应用会在<strong>您的设备本地</strong>处理并存储以下数据。
+<strong>这些数据始终保存在设备上，不会以任何方式离开您的设备：</strong></p>
+<table>
+  <tr><th style="width:34%">数据</th><th style="width:30%">用途</th><th>存储位置</th></tr>
+  <tr><td>您主动打开/保存的版图文件</td><td>查看、编辑与存储</td><td>由您在系统文件选择器中选择的位置</td></tr>
+  <tr><td>应用配置（界面布局、最近打开列表、图层配色 <code>.lyp</code> 等）</td><td>记住您的使用偏好</td><td>应用私有目录</td></tr>
+  <tr><td>应用内置的工艺库、DRC 规则、示例宏等资源</td><td>提供默认功能</td><td>首次运行时解压到应用私有目录</td></tr>
+</table>
+<p>您可以随时通过卸载本应用来彻底删除上述全部本地数据。</p>
+
+<h3>2.3 权限使用说明</h3>
+<p>本应用在应用清单（<code>module.json</code>）中<strong>声明并申请的系统权限为空</strong>（<code>requestPermissions: []</code>）。具体而言：</p>
+<ul>
+  <li><strong>不申请联网权限</strong>（<code>ohos.permission.INTERNET</code>）—— 本应用不具备任何联网能力，无法传输数据；</li>
+  <li><strong>不申请存储权限</strong> —— 打开与保存文件均通过 HarmonyOS 系统提供的<strong>文件选择器</strong>（DocumentViewPicker）完成，
+      由系统负责文件授权，本应用只获得您当次明确选中的那一个文件的访问能力；</li>
+  <li>不申请位置、相机、麦克风、通讯录、日历、电话、短信等任何敏感权限。</li>
+</ul>
+<p>您可以在系统"设置 → 应用 → KLayout"中随时查看本应用实际获得的权限，当前为<strong>零权限</strong>。</p>
+
+<h3>2.4 第三方 SDK 与代码</h3>
+<ul>
+  <li>本应用<strong>未集成任何第三方 SDK</strong>（无广告 SDK、无统计 SDK、无推送 SDK、无地图 SDK）。</li>
+  <li>本应用基于开源项目 KLayout（GPL-3.0）与 Qt 5.12.12（LGPL-3.0）构建。这两者是<strong>本地运行的软件库/框架</strong>，
+      本身不具备数据收集与上报能力。详情见<a href="https://github.com/yangy79/KLayout-on-Harmony-PC/blob/main/OPENSOURCE-COMPLIANCE.md" style="color:var(--accent)">开源合规声明</a>。</li>
+</ul>
+
+<h2 id="s3">三、数据安全</h2>
+<p>由于本应用不联网且不收集任何数据，不存在数据传输与远程存储环节，因此不存在相应的数据泄露风险。
+本地数据的安全性依赖于 HarmonyOS 提供的应用沙箱隔离机制，以及您设备的锁屏密码与加密存储。请您妥善保管设备并开启屏幕锁定。</p>
+
+<h2 id="s4">四、您的权利</h2>
+<p>由于本应用不收集、不存储、不共享您的任何个人信息，因此不涉及个人信息查询、更正、删除、撤回同意或注销账号等操作。
+您对本应用的全部数据（均为本地文件）拥有完全控制权，卸载应用即可清除应用私有目录内的全部配置与缓存。</p>
+
+<h2 id="s5">五、未成年人保护</h2>
+<p>本应用不收集任何个人信息，因此不存在针对未成年人的信息收集行为。本应用不含任何广告、付费内容或不宜由未成年人接触的内容，适用于包括未成年人在内的所有用户。若您是未成年人的监护人并对使用方式有疑问，可通过文末方式联系我们。</p>
+
+<h2 id="s6">六、本政策的变更</h2>
+<p>若本政策发生变更，我们将在本页面更新内容，并同步更新"最近更新"日期。若变更涉及您权利的重大调整，我们会通过应用内显著位置提示。请您定期查阅本页面了解最新内容。</p>
+
+<h2 id="s7">七、联系我们</h2>
+<p>开发者：<strong>yangy79</strong></p>
+<p>如对本隐私政策有任何疑问、意见或投诉，欢迎通过以下任一方式联系我们：</p>
+<ul>
+  <li><strong>电子邮箱</strong>：<a href="mailto:295399759@qq.com" style="color:var(--accent);text-decoration:none">295399759@qq.com</a></li>
+  <li><strong>应用市场</strong>：华为应用市场 KLayout 详情页的开发者联系方式</li>
+  <li><strong>项目主页</strong>：<a href="https://github.com/yangy79/KLayout-on-Harmony-PC" style="color:var(--accent);text-decoration:none">github.com/yangy79/KLayout-on-Harmony-PC</a></li>
+</ul>
+<p>我们将在收到反馈后 <strong>15 个工作日</strong>内予以答复。</p>
+
+<footer>
+  KLayout 1.0.0 · 隐私政策 · 最后更新于 2026 年 9 月 12 日<br>
+  本政策依据《中华人民共和国个人信息保护法》《移动互联网应用程序信息服务管理规定》制定。<br>
+  相关页面：<a href="privacy-en.html" style="color:#0A59F7;text-decoration:none">English version</a> ·
+  <a href="https://github.com/yangy79/KLayout-on-Harmony-PC" style="color:#0A59F7;text-decoration:none">项目源码</a> ·
+  <a href="https://github.com/yangy79/KLayout-on-Harmony-PC/blob/main/OPENSOURCE-COMPLIANCE.md" style="color:#0A59F7;text-decoration:none">开源合规声明</a>
+</footer>
+
+</div>
+</body>
+</html>
