@@ -36,6 +36,11 @@
 ├── NOTICE.md                      ← 三方组件与许可清单
 ├── OPENSOURCE-COMPLIANCE.md       ← 面向应用市场审核的开源合规声明
 │
+├── index.html                     ← 站点落地页（GitHub Pages）
+├── privacy.html                   ← 隐私政策（简体中文，AGC 上架填这个）
+├── privacy-en.html                ← Privacy Policy (English)
+├── .nojekyll                      ← 关闭 Jekyll，静态文件原样发布
+│
 ├── patches/                       ← 相对上游源码的改动（统一 diff）
 │   ├── klayout-0.30.10-ohos.patch         7 个源文件
 │   └── qt5-ohos-mkspec-no-werror.patch    Qt mkspec 单行改动
@@ -50,6 +55,19 @@
 ├── scripts/                       ← 通用入口脚本（取源码 / 打补丁）
 └── docs/                          ← 移植说明、构建说明、验证记录、截图
 ```
+
+### 在线页面（GitHub Pages）
+
+把本仓库的 `main` 分支根目录发布为静态站点，用于承载上架所需的隐私政策页面：
+
+| 页面 | 地址 |
+|---|---|
+| 隐私政策（简体中文） | <https://yangy79.github.io/KLayout-on-Harmony-PC/privacy.html> |
+| Privacy Policy (English) | <https://yangy79.github.io/KLayout-on-Harmony-PC/privacy-en.html> |
+| 站点首页 | <https://yangy79.github.io/KLayout-on-Harmony-PC/> |
+
+> 站点内容是**纯静态 HTML**（无框架、无外部资源、无脚本），与源码同仓维护；
+> 改动后提交并推送即可，GitHub Pages 约 1 分钟自动重建。
 
 ---
 
